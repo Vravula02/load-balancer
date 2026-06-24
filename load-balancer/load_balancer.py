@@ -2,11 +2,9 @@ import threading
 import time
 import httpx
 from fastapi import FastAPI, HTTPException
+from contextlib import asynccontextmanager
 import uvicorn
 
-app = FastAPI()
-
-# ── Backend server list ──────────────────────────────────────────
 BACKENDS = [
     {"url": "http://localhost:8001", "connections": 0, "healthy": True},
     {"url": "http://localhost:8002", "connections": 0, "healthy": True},
@@ -14,9 +12,18 @@ BACKENDS = [
 ]
 
 lock = threading.Lock()
-
-# ── Round Robin ──────────────────────────────────────────────────
 rr_index = 0
+client = None
+
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    global client
+    client = httpx.AsyncClient(timeout=10)
+    threading.Thread(target=health_check, daemon=True).start()
+    yield
+    await client.aclose()
+
+app = FastAPI(lifespan=lifespan)
 
 def get_round_robin():
     global rr_index
@@ -28,7 +35,6 @@ def get_round_robin():
         rr_index += 1
         return backend
 
-# ── Least Connections ────────────────────────────────────────────
 def get_least_connections():
     with lock:
         healthy = [b for b in BACKENDS if b["healthy"]]
@@ -36,7 +42,6 @@ def get_least_connections():
             return None
         return min(healthy, key=lambda b: b["connections"])
 
-# ── Health Checks ────────────────────────────────────────────────
 def health_check():
     while True:
         for backend in BACKENDS:
@@ -47,20 +52,17 @@ def health_check():
                 backend["healthy"] = False
         time.sleep(5)
 
-threading.Thread(target=health_check, daemon=True).start()
-
-# ── Routes ───────────────────────────────────────────────────────
 @app.get("/rr")
-def round_robin():
+async def round_robin():
     backend = get_round_robin()
     if not backend:
         raise HTTPException(status_code=503, detail="No healthy backends")
     with lock:
         backend["connections"] += 1
     try:
-        r = httpx.get(f"{backend['url']}/", timeout=5)
+        r = await client.get(f"{backend['url']}/")
         return r.json()
-    except:
+    except Exception as e:
         backend["healthy"] = False
         raise HTTPException(status_code=502, detail="Backend failed")
     finally:
@@ -68,16 +70,16 @@ def round_robin():
             backend["connections"] -= 1
 
 @app.get("/lc")
-def least_connections():
+async def least_connections():
     backend = get_least_connections()
     if not backend:
         raise HTTPException(status_code=503, detail="No healthy backends")
     with lock:
         backend["connections"] += 1
     try:
-        r = httpx.get(f"{backend['url']}/", timeout=5)
+        r = await client.get(f"{backend['url']}/")
         return r.json()
-    except:
+    except Exception as e:
         backend["healthy"] = False
         raise HTTPException(status_code=502, detail="Backend failed")
     finally:

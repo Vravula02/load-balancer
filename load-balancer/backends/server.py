@@ -1,20 +1,21 @@
 import uvicorn
 from fastapi import FastAPI
 import argparse
-import time
+import asyncio
 import random
 
 app = FastAPI()
 
+PORT = 8001
+
 @app.get("/")
-def home():
-    # Simulate variable response time
+async def home():
     delay = random.uniform(0.01, 0.1)
-    time.sleep(delay)
+    await asyncio.sleep(delay)
     return {"message": "Hello from backend!", "port": PORT}
 
 @app.get("/health")
-def health():
+async def health():
     return {"status": "healthy", "port": PORT}
 
 if __name__ == "__main__":
